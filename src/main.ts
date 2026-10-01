@@ -2,7 +2,7 @@
 const HR_SERVICE = 0x180d;
 const HR_MEASUREMENT = 0x2a37;
 const TICK_MS = 5000;
-const HISTORY_POINTS = 360; // 30 minutes at 5s per point
+const HISTORY_POINTS = 8640; // whole session, up to 12 hours at 5s per point
 const SETTINGS_KEY = "hrZonesSettings.v2";
 // Cycling max HR typically runs ~5 bpm below running max (seated, less muscle mass loaded).
 const BIKE_MAX_OFFSET = 5;
@@ -107,6 +107,8 @@ const els = {
   zoneTime: $("zoneTime"),
   zonePct: $("zonePct"),
   avgBpm: $("avgBpm"),
+  maxBpm: $("maxBpm"),
+  chartInfo: $("chartInfo"),
   kcal: $("kcal"),
   zoneTimes: $("zoneTimes"),
   chart: $<HTMLCanvasElement>("chart"),
@@ -244,6 +246,7 @@ let sessionSec = 0;
 let zoneSecs = [0, 0, 0, 0, 0, 0]; // index 0 = below zone 1
 let bpmSum = 0;
 let bpmCount = 0;
+let peakBpm = 0;
 let kcalTotal = 0;
 let lastReadingAt = 0;
 
@@ -254,6 +257,7 @@ function resetSession() {
   zoneSecs = [0, 0, 0, 0, 0, 0];
   bpmSum = 0;
   bpmCount = 0;
+  peakBpm = 0;
   kcalTotal = 0;
   renderStats();
   drawChart();
@@ -285,6 +289,7 @@ function tick() {
   zoneSecs[zoneNumber(value)] += TICK_MS / 1000;
   bpmSum += value;
   bpmCount += 1;
+  peakBpm = Math.max(peakBpm, value);
   kcalTotal += kcalPerMinute(value) * (TICK_MS / 60000);
   hrHistory.push(value);
   if (hrHistory.length > HISTORY_POINTS) hrHistory.shift();
@@ -447,6 +452,7 @@ function renderStats() {
   els.zoneTime.textContent = fmtTime(inTarget);
   els.zonePct.textContent = sessionSec ? `${Math.round((inTarget / sessionSec) * 100)}%` : "0%";
   els.avgBpm.textContent = bpmCount ? String(Math.round(bpmSum / bpmCount)) : "--";
+  els.maxBpm.textContent = peakBpm ? String(peakBpm) : "--";
   els.kcal.textContent = String(Math.round(kcalTotal));
 
   els.zoneTimes.replaceChildren(
@@ -461,6 +467,12 @@ function renderStats() {
   );
 }
 
+// Picks a "nice" tick spacing (in seconds) for the time axis.
+function timeStep(totalSec: number) {
+  const steps = [60, 120, 300, 600, 900, 1800, 3600, 7200];
+  return steps.find((st) => totalSec / st <= 6) ?? 7200;
+}
+
 function drawChart() {
   const canvas = els.chart;
   const dpr = window.devicePixelRatio || 1;
@@ -472,41 +484,91 @@ function drawChart() {
   ctx.scale(dpr, dpr);
   ctx.clearRect(0, 0, w, h);
 
+  const padL = 34;
+  const padB = 20;
+  const pw = w - padL - 4;
+  const ph = h - padB - 4;
+
   const ranges = zoneRanges();
   const yMin = Math.min(ranges[0].low, ...hrHistory) - 5;
   const yMax = Math.max(ranges[4].high, ...hrHistory) + 5;
-  const y = (v: number) => h - ((v - yMin) / (yMax - yMin)) * h;
+  const y = (v: number) => 4 + ph - ((v - yMin) / (yMax - yMin)) * ph;
 
-  // zone bands
+  // Show at least 10 minutes so the line doesn't start stretched across the whole width.
+  const stepSec = TICK_MS / 1000;
+  const totalSec = Math.max(600, (hrHistory.length - 1) * stepSec);
+  const x = (i: number) => padL + ((i * stepSec) / totalSec) * pw;
+
+  // zone bands with bpm boundaries
+  ctx.font = "11px system-ui";
   for (const z of ranges) {
     ctx.fillStyle = cssVar(z.color);
     ctx.globalAlpha = z.n === settings.target ? 0.22 : 0.08;
-    ctx.fillRect(0, y(z.high), w, y(z.low) - y(z.high));
+    ctx.fillRect(padL, y(z.high), pw, y(z.low) - y(z.high));
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = cssVar("--muted");
+    ctx.textAlign = "right";
+    ctx.fillText(String(z.low), padL - 6, y(z.low) + 4);
   }
-  ctx.globalAlpha = 1;
-  ctx.fillStyle = cssVar("--muted");
-  ctx.font = "11px system-ui";
-  for (const z of ranges) ctx.fillText(`Z${z.n}`, 4, (y(z.low) + y(z.high)) / 2 + 4);
+  ctx.fillText(String(ranges[4].high), padL - 6, y(ranges[4].high) + 4);
+
+  // time axis
+  ctx.textAlign = "center";
+  const tStep = timeStep(totalSec);
+  ctx.strokeStyle = cssVar("--border");
+  ctx.lineWidth = 1;
+  for (let t = 0; t <= totalSec; t += tStep) {
+    const tx = padL + (t / totalSec) * pw;
+    ctx.beginPath();
+    ctx.moveTo(tx, 4);
+    ctx.lineTo(tx, 4 + ph);
+    ctx.stroke();
+    ctx.fillText(fmtTime(t), Math.min(tx, w - 18), h - 5);
+  }
+
+  els.chartInfo.textContent = hrHistory.length
+    ? `${fmtTime(sessionSec)} · avg ${Math.round(bpmSum / bpmCount)} · peak ${peakBpm} bpm`
+    : "";
 
   if (hrHistory.length < 2) {
-    ctx.textAlign = "center";
-    ctx.fillText("Your heart rate line appears here", w / 2, h / 2);
+    ctx.fillStyle = cssVar("--muted");
+    ctx.fillText("Your heart rate for the whole session appears here", padL + pw / 2, 4 + ph / 2);
     ctx.textAlign = "start";
     return;
   }
+  ctx.textAlign = "start";
 
-  const step = w / (HISTORY_POINTS - 1);
-  const x0 = w - (hrHistory.length - 1) * step;
+  // average line
+  const avg = bpmSum / bpmCount;
+  ctx.setLineDash([4, 4]);
+  ctx.strokeStyle = cssVar("--text");
+  ctx.globalAlpha = 0.5;
+  ctx.beginPath();
+  ctx.moveTo(padL, y(avg));
+  ctx.lineTo(padL + pw, y(avg));
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.globalAlpha = 1;
+
+  // heart rate line, colored by zone
   ctx.lineWidth = 2.5;
   ctx.lineJoin = "round";
+  ctx.lineCap = "round";
   for (let i = 1; i < hrHistory.length; i++) {
     const zn = zoneNumber(hrHistory[i]);
     ctx.strokeStyle = zn ? cssVar(ZONES[zn - 1].color) : cssVar("--muted");
     ctx.beginPath();
-    ctx.moveTo(x0 + (i - 1) * step, y(hrHistory[i - 1]));
-    ctx.lineTo(x0 + i * step, y(hrHistory[i]));
+    ctx.moveTo(x(i - 1), y(hrHistory[i - 1]));
+    ctx.lineTo(x(i), y(hrHistory[i]));
     ctx.stroke();
   }
+
+  // current point
+  const last = hrHistory.length - 1;
+  ctx.fillStyle = cssVar("--text");
+  ctx.beginPath();
+  ctx.arc(x(last), y(hrHistory[last]), 4, 0, Math.PI * 2);
+  ctx.fill();
 }
 
 // ---------- audio cue ----------

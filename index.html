@@ -23,59 +23,66 @@
         Demo mode still works here.
       </p>
 
+      <section class="hero">
+        <section id="card" class="card live idle">
+          <div class="live-top">
+            <span id="zoneBadge" class="badge">--</span>
+            <span class="target-pill">Target: <b id="targetName">Zone 2</b> · <span id="targetRange">--</span></span>
+          </div>
+          <div class="bpm"><span id="bpm">--</span><small>bpm</small></div>
+          <div id="zoneLabel" class="zone-label">Connect your heart rate strap to start</div>
+          <div id="targetCadence" class="cadence"></div>
+
+          <div class="zbar" id="zbar"></div>
+          <div class="zbar-legend" id="zbarLegend"></div>
+        </section>
+
+        <div class="actions">
+          <button id="connectBtn" class="primary">Search devices</button>
+          <button id="demoBtn">Demo mode</button>
+          <button id="resetBtn">Reset session</button>
+        </div>
+        <label class="show-all"><input id="showAll" type="checkbox" /> Show all Bluetooth devices, not only heart rate sensors</label>
+
+        <section id="knownWrap" class="panel known" hidden>
+          <h2>Your devices</h2>
+          <ul id="knownList"></ul>
+        </section>
+      </section>
+
+      <section class="stats">
+        <div><label>Session</label><b id="sessionTime">0:00</b></div>
+        <div><label>In target</label><b id="zoneTime">0:00</b></div>
+        <div><label>% in target</label><b id="zonePct">0%</b></div>
+        <div><label>Average</label><b id="avgBpm">--</b></div>
+        <div><label>Peak</label><b id="maxBpm">--</b></div>
+        <div><label>Calories (est.)</label><b id="kcal">0</b></div>
+      </section>
+
+      <section class="panel chart-wrap">
+        <div class="chart-head">
+          <h2>Whole session</h2>
+          <span id="chartInfo" class="muted small"></span>
+        </div>
+        <canvas id="chart"></canvas>
+      </section>
+
       <div class="layout">
         <div class="col">
-          <section id="card" class="card live idle">
-            <div class="live-top">
-              <span id="zoneBadge" class="badge">--</span>
-              <span class="target-pill">Target: <b id="targetName">Zone 2</b> · <span id="targetRange">--</span></span>
-            </div>
-            <div class="bpm"><span id="bpm">--</span><small>bpm</small></div>
-            <div id="zoneLabel" class="zone-label">Connect your heart rate strap to start</div>
-            <div id="targetCadence" class="cadence"></div>
-
-            <div class="zbar" id="zbar"></div>
-            <div class="zbar-legend" id="zbarLegend"></div>
-          </section>
-
-          <div class="actions">
-            <button id="connectBtn" class="primary">Search devices</button>
-            <button id="demoBtn">Demo mode</button>
-            <button id="resetBtn">Reset session</button>
-          </div>
-          <label class="show-all"><input id="showAll" type="checkbox" /> Show all Bluetooth devices, not only heart rate sensors</label>
-
-          <section id="knownWrap" class="panel known" hidden>
-            <h2>Your devices</h2>
-            <ul id="knownList"></ul>
-          </section>
-
-          <section class="stats">
-            <div><label>Session</label><b id="sessionTime">0:00</b></div>
-            <div><label>In target</label><b id="zoneTime">0:00</b></div>
-            <div><label>% in target</label><b id="zonePct">0%</b></div>
-            <div><label>Average</label><b id="avgBpm">--</b></div>
-            <div><label>Calories (est.)</label><b id="kcal">0</b></div>
-          </section>
-
           <section class="panel">
             <h2>Time in each zone</h2>
             <div id="zoneTimes" class="zone-times"></div>
           </section>
 
-          <section class="panel chart-wrap">
-            <h2>Last 30 minutes</h2>
-            <canvas id="chart"></canvas>
-          </section>
-        </div>
-
-        <div class="col">
           <section class="panel">
             <h2>Your zones</h2>
             <p id="profileLine" class="muted small"></p>
             <div id="zonesTable" class="zones"></div>
           </section>
 
+        </div>
+
+        <div class="col">
           <section class="panel">
             <h2>Recommended week</h2>
             <ul id="weekPlan" class="week"></ul>
