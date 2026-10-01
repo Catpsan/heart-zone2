@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0f1115" />
+    <title>Zone 2 Heart Rate</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Zone 2 Heart Rate</h1>
+        <span id="conn" class="conn off">Disconnected</span>
+      </header>
+
+      <p id="unsupported" class="warn" hidden>
+        This browser can't use Bluetooth. Open this page in Chrome or Edge on a laptop with Bluetooth
+        turned on.
+      </p>
+
+      <section id="card" class="card idle">
+        <div class="bpm"><span id="bpm">--</span><small>bpm</small></div>
+        <div id="zoneLabel" class="zone-label">Connect a heart rate sensor</div>
+        <div class="bar">
+          <div id="band" class="band"></div>
+          <div id="marker" class="marker" hidden></div>
+        </div>
+        <div class="bar-legend">
+          <span>Easy</span>
+          <span>Zone 2: <span id="lowLabel">--</span>–<span id="highLabel">--</span> bpm</span>
+          <span>Max</span>
+        </div>
+      </section>
+
+      <div class="actions">
+        <button id="connectBtn" class="primary">Search devices</button>
+        <button id="demoBtn">Demo mode</button>
+        <button id="resetBtn">Reset session</button>
+      </div>
+
+      <label class="show-all"><input id="showAll" type="checkbox" /> Show all Bluetooth devices, not only heart rate sensors</label>
+
+      <section id="knownWrap" class="known" hidden>
+        <h2>Your devices</h2>
+        <ul id="knownList"></ul>
+      </section>
+
+      <section class="stats">
+        <div><label>Session</label><b id="sessionTime">0:00</b></div>
+        <div><label>Time in zone 2</label><b id="zoneTime">0:00</b></div>
+        <div><label>% in zone</label><b id="zonePct">0%</b></div>
+        <div><label>Average</label><b id="avgBpm">--</b></div>
+        <div><label>Calories (est.)</label><b id="kcal">0</b></div>
+      </section>
+
+      <section class="chart-wrap">
+        <canvas id="chart" height="160"></canvas>
+      </section>
+
+      <details class="settings" open>
+        <summary>Zone settings</summary>
+        <div class="grid">
+          <label>Age <input id="age" type="number" min="10" max="100" inputmode="numeric" /></label>
+          <label>Sex
+            <select id="sex"><option value="male">Male</option><option value="female">Female</option></select>
+          </label>
+          <label>Weight (kg) <input id="weight" type="number" min="30" max="250" step="0.1" inputmode="decimal" /></label>
+          <label>Max HR <input id="maxHr" type="number" min="100" max="230" inputmode="numeric" /></label>
+          <label>Zone 2 low % <input id="lowPct" type="number" min="40" max="90" /></label>
+          <label>Zone 2 high % <input id="highPct" type="number" min="40" max="95" /></label>
+          <label class="check"><input id="beep" type="checkbox" /> Beep when I leave zone 2</label>
+        </div>
+        <p class="hint">
+          Max HR defaults to 220 minus your age. If you know your real max HR, type it in and it wins.
+          Display refreshes every 5 seconds using the average of the readings in that window. Calories are a rough estimate from heart rate, age, sex and weight.
+        </p>
+      </details>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
