@@ -12,6 +12,9 @@ broadcasting HR) and shows, every 5 seconds, which of the 5 heart rate zones you
 - "Your zones" panel shows each zone's bpm range for your profile, how it should feel, the target cadence and resistance, and a recommended indoor bike workout, plus a sample training week. Click a zone to make it the target.
 - Profile defaults: age 29, male, 79 kg (editable, saved in the browser).
 - Tracks session time, time and % in target, time in each zone, average HR, estimated calories (Keytel formula), and a whole-session chart with zone bands, time axis and average line.
+- **Focus mode**: full-screen view with just the heart rate, trend arrow, zone and key numbers, readable from the bike.
+- **HR drift**: after 30 min, compares the 2nd half of the ride to the 1st (after a 10 min warm-up). Under 5% means a solid aerobic base.
+- **Ride history**: "Finish ride" saves the ride (time in target, avg, peak, drift, calories) in the browser, with CSV export. The current ride is auto-saved, so a refresh doesn't lose it.
 - Keeps the screen awake, auto-reconnects if the sensor drops, optional beep when you leave the target zone.
 - "Demo mode" simulates a sensor so you can try it on a PC without Bluetooth.
 

@@ -4,6 +4,11 @@ const HR_MEASUREMENT = 0x2a37;
 const TICK_MS = 5000;
 const HISTORY_POINTS = 8640; // whole session, up to 12 hours at 5s per point
 const SETTINGS_KEY = "hrZonesSettings.v2";
+const CURRENT_KEY = "hrZonesCurrentRide.v1";
+const HISTORY_KEY = "hrZonesRideHistory.v1";
+const MAX_SAVED_RIDES = 30;
+const WARMUP_TICKS = 120; // first 10 min excluded from drift
+const MIN_DRIFT_TICKS = 240; // need 20 min after warm-up
 // Cycling max HR typically runs ~5 bpm below running max (seated, less muscle mass loaded).
 const BIKE_MAX_OFFSET = 5;
 
@@ -102,7 +107,18 @@ const els = {
   zbarLegend: $("zbarLegend"),
   connectBtn: $<HTMLButtonElement>("connectBtn"),
   demoBtn: $<HTMLButtonElement>("demoBtn"),
-  resetBtn: $<HTMLButtonElement>("resetBtn"),
+  focusBtn: $<HTMLButtonElement>("focusBtn"),
+  exitFocusBtn: $<HTMLButtonElement>("exitFocusBtn"),
+  finishBtn: $<HTMLButtonElement>("finishBtn"),
+  discardBtn: $<HTMLButtonElement>("discardBtn"),
+  restored: $("restored"),
+  trend: $("trend"),
+  drift: $("drift"),
+  fTime: $("fTime"),
+  fPct: $("fPct"),
+  fAvg: $("fAvg"),
+  historyList: $("historyList"),
+  historyEmpty: $("historyEmpty"),
   sessionTime: $("sessionTime"),
   zoneTime: $("zoneTime"),
   zonePct: $("zonePct"),
@@ -249,8 +265,10 @@ let bpmCount = 0;
 let peakBpm = 0;
 let kcalTotal = 0;
 let lastReadingAt = 0;
+let sessionStart: number | null = null;
 
 function resetSession() {
+  sessionStart = null;
   windowReadings = [];
   hrHistory = [];
   sessionSec = 0;
@@ -259,8 +277,191 @@ function resetSession() {
   bpmCount = 0;
   peakBpm = 0;
   kcalTotal = 0;
+  clearCurrent();
   renderStats();
   drawChart();
+}
+
+// ---------- persistence (current ride survives a refresh; finished rides go to history) ----------
+
+interface SavedRide {
+  start: number;
+  sessionSec: number;
+  zoneSecs: number[];
+  bpmSum: number;
+  bpmCount: number;
+  peakBpm: number;
+  kcalTotal: number;
+  target: number;
+  hr: number[];
+  savedAt: number;
+}
+
+function readJson<T>(key: string, fallback: T): T {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeJson(key: string, value: unknown) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    /* storage full or unavailable */
+  }
+}
+
+function snapshot(): SavedRide {
+  return {
+    start: sessionStart ?? Date.now(),
+    sessionSec,
+    zoneSecs,
+    bpmSum,
+    bpmCount,
+    peakBpm,
+    kcalTotal,
+    target: settings.target,
+    hr: hrHistory,
+    savedAt: Date.now(),
+  };
+}
+
+function saveCurrent() {
+  writeJson(CURRENT_KEY, snapshot());
+}
+
+function clearCurrent() {
+  try {
+    localStorage.removeItem(CURRENT_KEY);
+  } catch {
+    /* ignore */
+  }
+}
+
+// Restore an unfinished ride from the last 6 hours (e.g. after an accidental refresh).
+function restoreCurrent() {
+  const r = readJson<SavedRide | null>(CURRENT_KEY, null);
+  if (!r || !r.bpmCount || Date.now() - r.savedAt > 6 * 3600 * 1000) return;
+  sessionStart = r.start;
+  sessionSec = r.sessionSec;
+  zoneSecs = r.zoneSecs;
+  bpmSum = r.bpmSum;
+  bpmCount = r.bpmCount;
+  peakBpm = r.peakBpm;
+  kcalTotal = r.kcalTotal;
+  hrHistory = r.hr;
+  els.restored.hidden = false;
+  setTimeout(() => (els.restored.hidden = true), 8000);
+}
+
+function loadHistory() {
+  return readJson<SavedRide[]>(HISTORY_KEY, []);
+}
+
+function finishRide() {
+  if (sessionSec < 60) {
+    resetSession();
+    return;
+  }
+  if (!confirm("Save this ride to your history and start a new one?")) return;
+  const rides = [snapshot(), ...loadHistory()].slice(0, MAX_SAVED_RIDES);
+  writeJson(HISTORY_KEY, rides);
+  resetSession();
+  renderHistory();
+}
+
+function discardRide() {
+  if (sessionSec >= 60 && !confirm("Discard the current ride without saving?")) return;
+  resetSession();
+}
+
+function downloadCsv(ride: SavedRide) {
+  const step = TICK_MS / 1000;
+  const lines = ["elapsed_seconds,bpm,zone", ...ride.hr.map((b, i) => `${i * step},${b},${zoneNumber(b)}`)];
+  const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `ride-${new Date(ride.start).toISOString().slice(0, 16).replace(":", "")}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+function renderHistory() {
+  const rides = loadHistory();
+  els.historyEmpty.hidden = rides.length > 0;
+  els.historyList.replaceChildren(
+    ...rides.map((ride, idx) => {
+      const li = document.createElement("li");
+      const pct = ride.sessionSec ? Math.round(((ride.zoneSecs[ride.target] ?? 0) / ride.sessionSec) * 100) : 0;
+      const d = driftOf(ride.hr);
+      const when = new Date(ride.start).toLocaleString(undefined, {
+        weekday: "short",
+        day: "numeric",
+        month: "short",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+      li.innerHTML = `
+        <div class="h-top"><b>${when}</b><span class="muted">${fmtTime(ride.sessionSec)}</span></div>
+        <div class="h-stats">
+          <span><b>${pct}%</b> in Z${ride.target}</span>
+          <span>avg <b>${Math.round(ride.bpmSum / ride.bpmCount)}</b></span>
+          <span>peak <b>${ride.peakBpm}</b></span>
+          <span>drift <b class="${d === null ? "" : driftClass(d)}">${d === null ? "--" : fmtDrift(d)}</b></span>
+          <span><b>${Math.round(ride.kcalTotal)}</b> kcal</span>
+        </div>`;
+      const btns = document.createElement("div");
+      btns.className = "h-btns";
+      const csv = Object.assign(document.createElement("button"), { className: "link", textContent: "Download CSV" });
+      csv.addEventListener("click", () => downloadCsv(ride));
+      const del = Object.assign(document.createElement("button"), { className: "link danger", textContent: "Delete" });
+      del.addEventListener("click", () => {
+        if (!confirm("Delete this ride?")) return;
+        const all = loadHistory();
+        all.splice(idx, 1);
+        writeJson(HISTORY_KEY, all);
+        renderHistory();
+      });
+      btns.append(csv, del);
+      li.append(btns);
+      return li;
+    }),
+  );
+}
+
+// ---------- aerobic drift and trend ----------
+
+// HR drift (%): average of the 2nd half vs the 1st half, after a 10 min warm-up.
+// At a steady effort, under 5% suggests a solid aerobic base.
+function driftOf(hr: number[]): number | null {
+  const body = hr.slice(WARMUP_TICKS);
+  if (body.length < MIN_DRIFT_TICKS) return null;
+  const mid = Math.floor(body.length / 2);
+  const avg = (a: number[]) => a.reduce((x, y) => x + y, 0) / a.length;
+  return (avg(body.slice(mid)) / avg(body.slice(0, mid)) - 1) * 100;
+}
+
+function fmtDrift(d: number) {
+  const r = Math.round(d * 10) / 10;
+  return `${r > 0 ? "+" : ""}${(r === 0 ? 0 : r).toFixed(1)}%`;
+}
+
+function driftClass(d: number) {
+  return d < 5 ? "d-good" : d < 8 ? "d-warn" : "d-bad";
+}
+
+function renderTrend() {
+  const n = hrHistory.length;
+  if (n < 7) {
+    els.trend.textContent = "";
+    return;
+  }
+  const diff = hrHistory[n - 1] - hrHistory[n - 7];
+  els.trend.textContent = diff >= 3 ? "↑" : diff <= -3 ? "↓" : "→";
+  els.trend.className = `trend ${diff >= 3 ? "up" : diff <= -3 ? "down" : "flat"}`;
 }
 
 function onReading(bpm: number) {
@@ -285,6 +486,7 @@ function tick() {
     return;
   }
 
+  sessionStart ??= Date.now();
   sessionSec += TICK_MS / 1000;
   zoneSecs[zoneNumber(value)] += TICK_MS / 1000;
   bpmSum += value;
@@ -295,8 +497,10 @@ function tick() {
   if (hrHistory.length > HISTORY_POINTS) hrHistory.shift();
 
   renderReading(value);
+  renderTrend();
   renderStats();
   drawChart();
+  saveCurrent();
 }
 
 // Energy estimate from heart rate, weight, age and sex (Keytel et al. 2005).
@@ -454,6 +658,16 @@ function renderStats() {
   els.avgBpm.textContent = bpmCount ? String(Math.round(bpmSum / bpmCount)) : "--";
   els.maxBpm.textContent = peakBpm ? String(peakBpm) : "--";
   els.kcal.textContent = String(Math.round(kcalTotal));
+  const d = driftOf(hrHistory);
+  els.drift.textContent = d === null ? "--" : fmtDrift(d);
+  els.drift.className = d === null ? "" : driftClass(d);
+  els.drift.parentElement!.title =
+    d === null
+      ? "Shows after 30 min: how much your heart rate crept up in the 2nd half vs the 1st half (after a 10 min warm-up). Under 5% means a solid aerobic base."
+      : "Heart rate in the 2nd half vs the 1st half, after a 10 min warm-up. Under 5% good, 5–8% okay, over 8% ease off or fuel/hydrate.";
+  els.fTime.textContent = els.sessionTime.textContent;
+  els.fPct.textContent = els.zonePct.textContent;
+  els.fAvg.textContent = els.avgBpm.textContent;
 
   els.zoneTimes.replaceChildren(
     ...ZONES.map((z) => {
@@ -785,13 +999,35 @@ if (!("bluetooth" in navigator)) {
 
 els.connectBtn.addEventListener("click", searchDevices);
 els.demoBtn.addEventListener("click", () => (demoTimer ? stopDemo() : startDemo()));
-els.resetBtn.addEventListener("click", resetSession);
+els.finishBtn.addEventListener("click", finishRide);
+els.discardBtn.addEventListener("click", discardRide);
+
+// Focus mode: just the live card, big, for reading from the bike.
+function setFocus(on: boolean) {
+  document.body.classList.toggle("focus", on);
+  if (on) {
+    document.documentElement.requestFullscreen?.().catch(() => {});
+    keepScreenOn();
+  } else if (document.fullscreenElement) {
+    document.exitFullscreen().catch(() => {});
+  }
+}
+els.focusBtn.addEventListener("click", () => setFocus(true));
+els.exitFocusBtn.addEventListener("click", () => setFocus(false));
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") setFocus(false);
+});
+document.addEventListener("fullscreenchange", () => {
+  if (!document.fullscreenElement) setFocus(false);
+});
 for (const input of [els.age, els.sex, els.weight, els.restHr, els.maxMethod, els.maxHr, els.target, els.beep]) {
   input.addEventListener("change", onSettingsChange);
 }
 window.addEventListener("resize", drawChart);
 
 syncSettingsForm();
+restoreCurrent();
+renderHistory();
 renderKnownDevices();
 renderZones();
 renderStats();

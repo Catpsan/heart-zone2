@@ -29,20 +29,31 @@
             <span id="zoneBadge" class="badge">--</span>
             <span class="target-pill">Target: <b id="targetName">Zone 2</b> · <span id="targetRange">--</span></span>
           </div>
-          <div class="bpm"><span id="bpm">--</span><small>bpm</small></div>
+          <div class="bpm"><span id="bpm">--</span><small>bpm</small><i id="trend" class="trend" title="Trend over the last 30 seconds"></i></div>
           <div id="zoneLabel" class="zone-label">Connect your heart rate strap to start</div>
           <div id="targetCadence" class="cadence"></div>
 
           <div class="zbar" id="zbar"></div>
           <div class="zbar-legend" id="zbarLegend"></div>
+          <div class="focus-only focus-info">
+            <span>Time <b id="fTime">0:00</b></span>
+            <span>In target <b id="fPct">0%</b></span>
+            <span>Avg <b id="fAvg">--</b></span>
+            <button id="exitFocusBtn">Exit focus</button>
+          </div>
         </section>
 
         <div class="actions">
           <button id="connectBtn" class="primary">Search devices</button>
           <button id="demoBtn">Demo mode</button>
-          <button id="resetBtn">Reset session</button>
+          <button id="focusBtn">Focus mode</button>
+          <button id="finishBtn">Finish ride</button>
         </div>
-        <label class="show-all"><input id="showAll" type="checkbox" /> Show all Bluetooth devices, not only heart rate sensors</label>
+        <div class="subactions">
+          <label class="show-all"><input id="showAll" type="checkbox" /> Show all Bluetooth devices</label>
+          <button id="discardBtn" class="link">Discard current ride</button>
+        </div>
+        <p id="restored" class="restored" hidden>Picked up your unfinished ride where you left off.</p>
 
         <section id="knownWrap" class="panel known" hidden>
           <h2>Your devices</h2>
@@ -57,6 +68,7 @@
         <div><label>Average</label><b id="avgBpm">--</b></div>
         <div><label>Peak</label><b id="maxBpm">--</b></div>
         <div><label>Calories (est.)</label><b id="kcal">0</b></div>
+        <div title="How much your heart rate crept up in the 2nd half vs the 1st half, after a 10 min warm-up. Under 5% means a solid aerobic base."><label>HR drift</label><b id="drift">--</b></div>
       </section>
 
       <section class="panel chart-wrap">
@@ -83,6 +95,12 @@
         </div>
 
         <div class="col">
+          <section class="panel">
+            <h2>Ride history</h2>
+            <p id="historyEmpty" class="muted small">Press "Finish ride" after a workout to save it here.</p>
+            <ul id="historyList" class="history"></ul>
+          </section>
+
           <section class="panel">
             <h2>Recommended week</h2>
             <ul id="weekPlan" class="week"></ul>
