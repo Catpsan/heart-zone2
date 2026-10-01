@@ -1,21 +1,82 @@
-// Zone 2 heart rate monitor using the standard Bluetooth Heart Rate service.
+// Heart rate zone monitor using the standard Bluetooth Heart Rate service.
 const HR_SERVICE = 0x180d;
 const HR_MEASUREMENT = 0x2a37;
 const TICK_MS = 5000;
 const HISTORY_POINTS = 360; // 30 minutes at 5s per point
-const SETTINGS_KEY = "hrZone2Settings";
+const SETTINGS_KEY = "hrZonesSettings.v2";
 
+// Position relative to the target zone.
 type ZoneState = "below" | "in" | "above";
+type MaxMethod = "tanaka" | "fox" | "manual";
 
 interface Settings {
   age: number;
   sex: "male" | "female";
   weightKg: number;
-  maxHr: number | null; // null = derive from age
-  lowPct: number;
-  highPct: number;
+  restHr: number | null; // set = Karvonen (heart rate reserve) zones
+  maxMethod: MaxMethod;
+  maxHr: number | null; // used when maxMethod is "manual"
+  target: number; // 1..5
   beep: boolean;
 }
+
+interface ZoneDef {
+  n: number;
+  name: string;
+  lo: number; // fraction of max HR (or of HR reserve with Karvonen)
+  hi: number;
+  color: string;
+  feel: string;
+  workout: string;
+}
+
+const ZONES: ZoneDef[] = [
+  {
+    n: 1,
+    name: "Recovery",
+    lo: 0.5,
+    hi: 0.6,
+    color: "--z1",
+    feel: "Very easy, chatting freely",
+    workout: "20–40 min easy, warm-ups, cool-downs and recovery days",
+  },
+  {
+    n: 2,
+    name: "Endurance",
+    lo: 0.6,
+    hi: 0.7,
+    color: "--z2",
+    feel: "Easy, can talk in full sentences, nose breathing",
+    workout: "45–90 min steady, 3–4× per week. Most of your training lives here",
+  },
+  {
+    n: 3,
+    name: "Tempo",
+    lo: 0.7,
+    hi: 0.8,
+    color: "--z3",
+    feel: "Moderate, short sentences only",
+    workout: "2 × 15 min with 5 min easy between, at most 1× per week",
+  },
+  {
+    n: 4,
+    name: "Threshold",
+    lo: 0.8,
+    hi: 0.9,
+    color: "--z4",
+    feel: "Hard, a few words at a time",
+    workout: "4 × 6 min with 3 min easy between, 1× per week",
+  },
+  {
+    n: 5,
+    name: "VO₂ max",
+    lo: 0.9,
+    hi: 1.0,
+    color: "--z5",
+    feel: "All-out, can't talk",
+    workout: "5 × 3 min with 3 min easy between, 1× per week after 4–6 weeks of base",
+  },
+];
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -24,11 +85,12 @@ const els = {
   unsupported: $("unsupported"),
   card: $("card"),
   bpm: $("bpm"),
+  zoneBadge: $("zoneBadge"),
   zoneLabel: $("zoneLabel"),
-  band: $("band"),
-  marker: $("marker"),
-  lowLabel: $("lowLabel"),
-  highLabel: $("highLabel"),
+  targetName: $("targetName"),
+  targetRange: $("targetRange"),
+  zbar: $("zbar"),
+  zbarLegend: $("zbarLegend"),
   connectBtn: $<HTMLButtonElement>("connectBtn"),
   demoBtn: $<HTMLButtonElement>("demoBtn"),
   resetBtn: $<HTMLButtonElement>("resetBtn"),
@@ -37,13 +99,18 @@ const els = {
   zonePct: $("zonePct"),
   avgBpm: $("avgBpm"),
   kcal: $("kcal"),
+  zoneTimes: $("zoneTimes"),
+  chart: $<HTMLCanvasElement>("chart"),
+  profileLine: $("profileLine"),
+  zonesTable: $("zonesTable"),
+  weekPlan: $("weekPlan"),
+  age: $<HTMLInputElement>("age"),
   sex: $<HTMLSelectElement>("sex"),
   weight: $<HTMLInputElement>("weight"),
-  chart: $<HTMLCanvasElement>("chart"),
-  age: $<HTMLInputElement>("age"),
+  restHr: $<HTMLInputElement>("restHr"),
+  maxMethod: $<HTMLSelectElement>("maxMethod"),
   maxHr: $<HTMLInputElement>("maxHr"),
-  lowPct: $<HTMLInputElement>("lowPct"),
-  highPct: $<HTMLInputElement>("highPct"),
+  target: $<HTMLSelectElement>("target"),
   beep: $<HTMLInputElement>("beep"),
   showAll: $<HTMLInputElement>("showAll"),
   knownWrap: $("knownWrap"),
@@ -53,7 +120,16 @@ const els = {
 // ---------- settings ----------
 
 function loadSettings(): Settings {
-  const defaults: Settings = { age: 29, sex: "male", weightKg: 79, maxHr: null, lowPct: 60, highPct: 70, beep: false };
+  const defaults: Settings = {
+    age: 29,
+    sex: "male",
+    weightKg: 79,
+    restHr: null,
+    maxMethod: "tanaka",
+    maxHr: null,
+    target: 2,
+    beep: false,
+  };
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
     return raw ? { ...defaults, ...JSON.parse(raw) } : defaults;
@@ -72,22 +148,41 @@ function saveSettings() {
 
 let settings = loadSettings();
 
+function estimatedMaxHr(method: MaxMethod) {
+  return Math.round(method === "fox" ? 220 - settings.age : 208 - 0.7 * settings.age);
+}
+
 function effectiveMaxHr() {
-  return settings.maxHr ?? 220 - settings.age;
+  if (settings.maxMethod === "manual" && settings.maxHr) return settings.maxHr;
+  return estimatedMaxHr(settings.maxMethod === "fox" ? "fox" : "tanaka");
 }
 
-function zoneBounds() {
+// bpm at a given intensity fraction, by % of max HR or Karvonen when resting HR is known.
+function bpmAt(frac: number) {
   const max = effectiveMaxHr();
-  return {
-    low: Math.round((max * settings.lowPct) / 100),
-    high: Math.round((max * settings.highPct) / 100),
-  };
+  const rest = settings.restHr;
+  return Math.round(rest ? rest + frac * (max - rest) : frac * max);
 }
 
-function zoneOf(bpm: number): ZoneState {
-  const { low, high } = zoneBounds();
+function zoneRanges() {
+  return ZONES.map((z) => ({ ...z, low: bpmAt(z.lo), high: bpmAt(z.hi) }));
+}
+
+// Zone number 0..5 for a bpm (0 = below zone 1).
+function zoneNumber(bpm: number) {
+  const ranges = zoneRanges();
+  for (let i = ranges.length - 1; i >= 0; i--) if (bpm >= ranges[i].low) return ranges[i].n;
+  return 0;
+}
+
+function targetRange() {
+  return zoneRanges()[settings.target - 1];
+}
+
+function relationToTarget(bpm: number): ZoneState {
+  const { low, high } = targetRange();
   if (bpm < low) return "below";
-  if (bpm > high) return "above";
+  if (bpm >= high && settings.target < 5) return "above";
   return "in";
 }
 
@@ -95,32 +190,37 @@ function syncSettingsForm() {
   els.age.value = String(settings.age);
   els.sex.value = settings.sex;
   els.weight.value = String(settings.weightKg);
-  els.maxHr.value = settings.maxHr ? String(settings.maxHr) : "";
-  els.maxHr.placeholder = String(220 - settings.age);
-  els.lowPct.value = String(settings.lowPct);
-  els.highPct.value = String(settings.highPct);
+  els.restHr.value = settings.restHr ? String(settings.restHr) : "";
+  els.maxMethod.value = settings.maxMethod;
+  els.target.value = String(settings.target);
   els.beep.checked = settings.beep;
+  syncMaxField();
+}
+
+function syncMaxField() {
+  const manual = settings.maxMethod === "manual";
+  els.maxHr.disabled = !manual;
+  els.maxHr.value = String(manual && settings.maxHr ? settings.maxHr : effectiveMaxHr());
 }
 
 function onSettingsChange() {
   const age = parseInt(els.age.value, 10);
-  const maxHr = parseInt(els.maxHr.value, 10);
-  const lowPct = parseInt(els.lowPct.value, 10);
-  const highPct = parseInt(els.highPct.value, 10);
   if (age >= 10 && age <= 100) settings.age = age;
   const weight = parseFloat(els.weight.value);
   if (weight >= 30 && weight <= 250) settings.weightKg = weight;
   settings.sex = els.sex.value === "female" ? "female" : "male";
-  settings.maxHr = maxHr >= 100 && maxHr <= 230 ? maxHr : null;
-  if (lowPct > 0 && highPct > lowPct) {
-    settings.lowPct = lowPct;
-    settings.highPct = highPct;
-  }
+  const rest = parseInt(els.restHr.value, 10);
+  settings.restHr = rest >= 30 && rest <= 110 ? rest : null;
+  settings.maxMethod = els.maxMethod.value as MaxMethod;
+  const maxHr = parseInt(els.maxHr.value, 10);
+  if (settings.maxMethod === "manual") settings.maxHr = maxHr >= 100 && maxHr <= 230 ? maxHr : settings.maxHr;
+  settings.target = Math.min(5, Math.max(1, parseInt(els.target.value, 10) || 2));
   settings.beep = els.beep.checked;
-  els.maxHr.placeholder = String(220 - settings.age);
+  syncMaxField();
   saveSettings();
-  renderZoneBar();
+  renderZones();
   if (lastShown !== null) renderReading(lastShown);
+  renderStats();
   drawChart();
 }
 
@@ -128,10 +228,10 @@ function onSettingsChange() {
 
 let windowReadings: number[] = []; // raw readings since the last 5s tick
 let lastShown: number | null = null;
-let lastZone: ZoneState | null = null;
+let lastRelation: ZoneState | null = null;
 let hrHistory: number[] = [];
 let sessionSec = 0;
-let zoneSec = 0;
+let zoneSecs = [0, 0, 0, 0, 0, 0]; // index 0 = below zone 1
 let bpmSum = 0;
 let bpmCount = 0;
 let kcalTotal = 0;
@@ -141,7 +241,7 @@ function resetSession() {
   windowReadings = [];
   hrHistory = [];
   sessionSec = 0;
-  zoneSec = 0;
+  zoneSecs = [0, 0, 0, 0, 0, 0];
   bpmSum = 0;
   bpmCount = 0;
   kcalTotal = 0;
@@ -172,7 +272,7 @@ function tick() {
   }
 
   sessionSec += TICK_MS / 1000;
-  if (zoneOf(value) === "in") zoneSec += TICK_MS / 1000;
+  zoneSecs[zoneNumber(value)] += TICK_MS / 1000;
   bpmSum += value;
   bpmCount += 1;
   kcalTotal += kcalPerMinute(value) * (TICK_MS / 60000);
@@ -205,59 +305,147 @@ function fmtTime(sec: number) {
   return `${h ? h + ":" : ""}${mm}:${String(s).padStart(2, "0")}`;
 }
 
-// The bar spans 40%..100% of max HR.
+function cssVar(name: string) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+// The live bar spans from zone 1's floor to max HR; each zone gets its own segment.
 function barPct(bpm: number) {
-  const max = effectiveMaxHr();
-  const min = max * 0.4;
+  const ranges = zoneRanges();
+  const min = ranges[0].low;
+  const max = ranges[4].high;
   return Math.max(0, Math.min(100, ((bpm - min) / (max - min)) * 100));
 }
 
-function renderZoneBar() {
-  const { low, high } = zoneBounds();
-  els.band.style.left = `${barPct(low)}%`;
-  els.band.style.width = `${barPct(high) - barPct(low)}%`;
-  els.lowLabel.textContent = `${low}`;
-  els.highLabel.textContent = `${high}`;
+function renderZones() {
+  const ranges = zoneRanges();
+  const t = targetRange();
+  els.targetName.textContent = `Zone ${t.n}`;
+  els.targetRange.textContent = `${t.low}–${t.high} bpm`;
+
+  els.zbar.replaceChildren(
+    ...ranges.map((z) => {
+      const seg = document.createElement("div");
+      seg.className = `seg${z.n === settings.target ? " target" : ""}`;
+      seg.style.background = `var(${z.color})`;
+      seg.style.flex = String(z.high - z.low);
+      seg.textContent = `Z${z.n}`;
+      return seg;
+    }),
+    Object.assign(document.createElement("div"), { id: "marker", className: "marker", hidden: lastShown === null }),
+  );
+  els.zbarLegend.replaceChildren(
+    ...[ranges[0].low, ...ranges.map((z) => z.high)].map((v) => {
+      const s = document.createElement("span");
+      s.textContent = String(v);
+      s.style.left = `${barPct(v)}%`;
+      return s;
+    }),
+  );
+
+  const max = effectiveMaxHr();
+  const maxSource =
+    settings.maxMethod === "manual" ? "your measured max" : settings.maxMethod === "fox" ? "220 − age" : "Tanaka formula";
+  const method = settings.restHr ? `${maxSource}, Karvonen with resting HR ${settings.restHr}` : maxSource;
+  els.profileLine.textContent = `Age ${settings.age}, ${settings.sex}, ${settings.weightKg} kg · Max HR ${max} bpm (${method})`;
+
+  els.zonesTable.replaceChildren(
+    ...ranges.map((z) => {
+      const row = document.createElement("div");
+      row.className = `zrow${z.n === settings.target ? " target" : ""}`;
+      row.style.setProperty("--c", `var(${z.color})`);
+      row.innerHTML = `
+        <div class="zhead">
+          <span class="zdot"></span>
+          <b>Zone ${z.n}</b><span class="zname">${z.name}</span>
+          <span class="zbpm">${z.low}–${z.high} <small>bpm</small></span>
+        </div>
+        <div class="zfeel">${z.feel}</div>
+        <div class="zwork">${z.workout}</div>`;
+      row.addEventListener("click", () => {
+        els.target.value = String(z.n);
+        onSettingsChange();
+      });
+      row.title = "Set as target zone";
+      return row;
+    }),
+  );
+
+  const r = ranges;
+  const plan = [
+    ["Mon", `Zone 2 · 60 min at ${r[1].low}–${r[1].high} bpm`],
+    ["Tue", `Zone 4 intervals · 4 × 6 min at ${r[3].low}–${r[3].high}, 3 min easy between`],
+    ["Wed", `Zone 2 · 45–60 min`],
+    ["Thu", `Zone 1 recovery · 30 min under ${r[0].high} bpm, or rest`],
+    ["Fri", `Zone 2 · 60 min`],
+    ["Sat", `Long Zone 2 · 90 min, optional 5 × 3 min Zone 5 (${r[4].low}+ bpm) once a week`],
+    ["Sun", "Rest"],
+  ];
+  els.weekPlan.replaceChildren(
+    ...plan.map(([d, txt]) => {
+      const li = document.createElement("li");
+      li.innerHTML = `<b>${d}</b><span>${txt}</span>`;
+      return li;
+    }),
+  );
 }
 
 function renderReading(bpm: number) {
   lastShown = bpm;
-  const zone = zoneOf(bpm);
-  const { low, high } = zoneBounds();
-  els.bpm.textContent = String(bpm);
-  els.card.className = `card ${zone}`;
-  els.marker.hidden = false;
-  els.marker.style.left = `${barPct(bpm)}%`;
-  els.zoneLabel.textContent =
-    zone === "in"
-      ? "In zone 2"
-      : zone === "below"
-        ? `Below zone 2, speed up (+${low - bpm})`
-        : `Above zone 2, ease off (-${bpm - high})`;
+  const zn = zoneNumber(bpm);
+  const rel = relationToTarget(bpm);
+  const t = targetRange();
+  const zone = ZONES[Math.max(0, zn - 1)];
 
-  if (settings.beep && lastZone === "in" && zone !== "in") beep(zone);
-  lastZone = zone;
+  els.bpm.textContent = String(bpm);
+  els.card.className = `card live ${rel}`;
+  els.card.style.setProperty("--zc", zn ? `var(${zone.color})` : "var(--muted)");
+  els.zoneBadge.textContent = zn ? `Zone ${zn} · ${zone.name}` : "Below zone 1";
+  const marker = document.getElementById("marker");
+  if (marker) {
+    marker.hidden = false;
+    marker.style.left = `${barPct(bpm)}%`;
+  }
+  els.zoneLabel.textContent =
+    rel === "in"
+      ? `In your target zone ${t.n}`
+      : rel === "below"
+        ? `Below target, pick it up (+${t.low - bpm} bpm)`
+        : `Above target, ease off (−${bpm - t.high} bpm)`;
+
+  if (settings.beep && lastRelation === "in" && rel !== "in") beep(rel);
+  lastRelation = rel;
 }
 
 function showNoSignal() {
   els.bpm.textContent = "--";
-  els.card.className = "card idle";
-  els.marker.hidden = true;
+  els.card.className = "card live idle";
+  els.card.style.removeProperty("--zc");
+  els.zoneBadge.textContent = "--";
+  document.getElementById("marker")?.setAttribute("hidden", "");
   els.zoneLabel.textContent = "No signal from sensor";
   lastShown = null;
-  lastZone = null;
+  lastRelation = null;
 }
 
 function renderStats() {
+  const inTarget = zoneSecs[settings.target];
   els.sessionTime.textContent = fmtTime(sessionSec);
-  els.zoneTime.textContent = fmtTime(zoneSec);
-  els.zonePct.textContent = sessionSec ? `${Math.round((zoneSec / sessionSec) * 100)}%` : "0%";
+  els.zoneTime.textContent = fmtTime(inTarget);
+  els.zonePct.textContent = sessionSec ? `${Math.round((inTarget / sessionSec) * 100)}%` : "0%";
   els.avgBpm.textContent = bpmCount ? String(Math.round(bpmSum / bpmCount)) : "--";
   els.kcal.textContent = String(Math.round(kcalTotal));
-}
 
-function cssVar(name: string) {
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  els.zoneTimes.replaceChildren(
+    ...ZONES.map((z) => {
+      const sec = zoneSecs[z.n];
+      const pct = sessionSec ? (sec / sessionSec) * 100 : 0;
+      const row = document.createElement("div");
+      row.className = "ztime";
+      row.innerHTML = `<span>Z${z.n}</span><div class="track"><div style="width:${pct}%;background:var(${z.color})"></div></div><span class="num">${fmtTime(sec)}</span>`;
+      return row;
+    }),
+  );
 }
 
 function drawChart() {
@@ -271,34 +459,36 @@ function drawChart() {
   ctx.scale(dpr, dpr);
   ctx.clearRect(0, 0, w, h);
 
-  const { low, high } = zoneBounds();
-  const values = hrHistory.length ? hrHistory : [low, high];
-  const yMin = Math.min(...values, low) - 10;
-  const yMax = Math.max(...values, high) + 10;
+  const ranges = zoneRanges();
+  const yMin = Math.min(ranges[0].low, ...hrHistory) - 5;
+  const yMax = Math.max(ranges[4].high, ...hrHistory) + 5;
   const y = (v: number) => h - ((v - yMin) / (yMax - yMin)) * h;
 
-  // zone 2 band
-  ctx.fillStyle = cssVar("--in");
-  ctx.globalAlpha = 0.15;
-  ctx.fillRect(0, y(high), w, y(low) - y(high));
+  // zone bands
+  for (const z of ranges) {
+    ctx.fillStyle = cssVar(z.color);
+    ctx.globalAlpha = z.n === settings.target ? 0.22 : 0.08;
+    ctx.fillRect(0, y(z.high), w, y(z.low) - y(z.high));
+  }
   ctx.globalAlpha = 1;
-
   ctx.fillStyle = cssVar("--muted");
   ctx.font = "11px system-ui";
-  ctx.fillText(String(high), 4, y(high) - 3);
-  ctx.fillText(String(low), 4, y(low) + 12);
+  for (const z of ranges) ctx.fillText(`Z${z.n}`, 4, (y(z.low) + y(z.high)) / 2 + 4);
 
   if (hrHistory.length < 2) {
-    ctx.fillText("Heart rate history (last 30 min) appears here", w / 2 - 130, h / 2);
+    ctx.textAlign = "center";
+    ctx.fillText("Your heart rate line appears here", w / 2, h / 2);
+    ctx.textAlign = "start";
     return;
   }
 
   const step = w / (HISTORY_POINTS - 1);
   const x0 = w - (hrHistory.length - 1) * step;
-  ctx.lineWidth = 2;
+  ctx.lineWidth = 2.5;
+  ctx.lineJoin = "round";
   for (let i = 1; i < hrHistory.length; i++) {
-    const zone = zoneOf(hrHistory[i]);
-    ctx.strokeStyle = cssVar(zone === "in" ? "--in" : zone === "below" ? "--below" : "--above");
+    const zn = zoneNumber(hrHistory[i]);
+    ctx.strokeStyle = zn ? cssVar(ZONES[zn - 1].color) : cssVar("--muted");
     ctx.beginPath();
     ctx.moveTo(x0 + (i - 1) * step, y(hrHistory[i - 1]));
     ctx.lineTo(x0 + i * step, y(hrHistory[i]));
@@ -484,13 +674,17 @@ async function renderKnownDevices() {
 let demoTimer: number | null = null;
 
 function startDemo() {
-  let bpm = zoneBounds().low - 15;
+  const mid = (n: number) => {
+    const z = zoneRanges()[n - 1];
+    return (z.low + z.high) / 2;
+  };
+  let bpm = zoneRanges()[0].low - 10;
   let t = 0;
   demoTimer = window.setInterval(() => {
     t += 1;
-    const { low, high } = zoneBounds();
-    const target = t < 40 ? low - 10 : t < 200 ? (low + high) / 2 : t < 260 ? high + 8 : (low + high) / 2;
-    bpm += (target - bpm) * 0.05 + (Math.random() - 0.5) * 3;
+    // warm-up, steady zone 2, one hard surge, back to zone 2
+    const target = t < 30 ? mid(1) : t < 150 ? mid(2) : t < 200 ? mid(4) : t < 230 ? mid(5) : mid(2);
+    bpm += (target - bpm) * 0.06 + (Math.random() - 0.5) * 3;
     onReading(Math.round(bpm));
   }, 1000);
   setConn("on", "Demo mode");
@@ -517,14 +711,14 @@ if (!("bluetooth" in navigator)) {
 els.connectBtn.addEventListener("click", searchDevices);
 els.demoBtn.addEventListener("click", () => (demoTimer ? stopDemo() : startDemo()));
 els.resetBtn.addEventListener("click", resetSession);
-for (const input of [els.age, els.sex, els.weight, els.maxHr, els.lowPct, els.highPct, els.beep]) {
+for (const input of [els.age, els.sex, els.weight, els.restHr, els.maxMethod, els.maxHr, els.target, els.beep]) {
   input.addEventListener("change", onSettingsChange);
 }
 window.addEventListener("resize", drawChart);
 
 syncSettingsForm();
 renderKnownDevices();
-renderZoneBar();
+renderZones();
 renderStats();
 drawChart();
 setInterval(tick, TICK_MS);

@@ -3,79 +3,123 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="theme-color" content="#0f1115" />
-    <title>Zone 2 Heart Rate</title>
+    <meta name="theme-color" content="#0d0f14" />
+    <title>Heart Zones</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23ff4d6d' d='M12 21s-7.5-4.6-9.6-9.3C.9 8.4 3 4.5 6.7 4.5c2.1 0 3.6 1.1 4.3 2.6h2c.7-1.5 2.2-2.6 4.3-2.6 3.7 0 5.8 3.9 4.3 7.2C19.5 16.4 12 21 12 21z'/%3E%3C/svg%3E" />
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
-    <main>
-      <header>
-        <h1>Zone 2 Heart Rate</h1>
-        <span id="conn" class="conn off">Disconnected</span>
-      </header>
+    <header class="topbar">
+      <div class="brand">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-7.5-4.6-9.6-9.3C.9 8.4 3 4.5 6.7 4.5c2.1 0 3.6 1.1 4.3 2.6h2c.7-1.5 2.2-2.6 4.3-2.6 3.7 0 5.8 3.9 4.3 7.2C19.5 16.4 12 21 12 21z" /></svg>
+        <span>Heart Zones</span>
+      </div>
+      <span id="conn" class="conn off">Disconnected</span>
+    </header>
 
+    <main>
       <p id="unsupported" class="warn" hidden>
-        This browser can't use Bluetooth. Open this page in Chrome or Edge on a laptop with Bluetooth
-        turned on.
+        This browser can't use Bluetooth. Open this page in Chrome or Edge on a laptop with Bluetooth turned on.
+        Demo mode still works here.
       </p>
 
-      <section id="card" class="card idle">
-        <div class="bpm"><span id="bpm">--</span><small>bpm</small></div>
-        <div id="zoneLabel" class="zone-label">Connect a heart rate sensor</div>
-        <div class="bar">
-          <div id="band" class="band"></div>
-          <div id="marker" class="marker" hidden></div>
-        </div>
-        <div class="bar-legend">
-          <span>Easy</span>
-          <span>Zone 2: <span id="lowLabel">--</span>–<span id="highLabel">--</span> bpm</span>
-          <span>Max</span>
-        </div>
-      </section>
+      <div class="layout">
+        <div class="col">
+          <section id="card" class="card live idle">
+            <div class="live-top">
+              <span id="zoneBadge" class="badge">--</span>
+              <span class="target-pill">Target: <b id="targetName">Zone 2</b> · <span id="targetRange">--</span></span>
+            </div>
+            <div class="bpm"><span id="bpm">--</span><small>bpm</small></div>
+            <div id="zoneLabel" class="zone-label">Connect your heart rate strap to start</div>
 
-      <div class="actions">
-        <button id="connectBtn" class="primary">Search devices</button>
-        <button id="demoBtn">Demo mode</button>
-        <button id="resetBtn">Reset session</button>
+            <div class="zbar" id="zbar"></div>
+            <div class="zbar-legend" id="zbarLegend"></div>
+          </section>
+
+          <div class="actions">
+            <button id="connectBtn" class="primary">Search devices</button>
+            <button id="demoBtn">Demo mode</button>
+            <button id="resetBtn">Reset session</button>
+          </div>
+          <label class="show-all"><input id="showAll" type="checkbox" /> Show all Bluetooth devices, not only heart rate sensors</label>
+
+          <section id="knownWrap" class="panel known" hidden>
+            <h2>Your devices</h2>
+            <ul id="knownList"></ul>
+          </section>
+
+          <section class="stats">
+            <div><label>Session</label><b id="sessionTime">0:00</b></div>
+            <div><label>In target</label><b id="zoneTime">0:00</b></div>
+            <div><label>% in target</label><b id="zonePct">0%</b></div>
+            <div><label>Average</label><b id="avgBpm">--</b></div>
+            <div><label>Calories (est.)</label><b id="kcal">0</b></div>
+          </section>
+
+          <section class="panel">
+            <h2>Time in each zone</h2>
+            <div id="zoneTimes" class="zone-times"></div>
+          </section>
+
+          <section class="panel chart-wrap">
+            <h2>Last 30 minutes</h2>
+            <canvas id="chart"></canvas>
+          </section>
+        </div>
+
+        <div class="col">
+          <section class="panel">
+            <h2>Your zones</h2>
+            <p id="profileLine" class="muted small"></p>
+            <div id="zonesTable" class="zones"></div>
+          </section>
+
+          <section class="panel">
+            <h2>Recommended week</h2>
+            <ul id="weekPlan" class="week"></ul>
+            <p class="muted small">
+              General guidance for a healthy adult building aerobic base. If you're new to exercise or have a heart
+              condition, check with a doctor first.
+            </p>
+          </section>
+
+          <details class="panel settings">
+            <summary>Profile and settings</summary>
+            <div class="grid">
+              <label>Age <input id="age" type="number" min="10" max="100" inputmode="numeric" /></label>
+              <label>Sex
+                <select id="sex"><option value="male">Male</option><option value="female">Female</option></select>
+              </label>
+              <label>Weight (kg) <input id="weight" type="number" min="30" max="250" step="0.1" inputmode="decimal" /></label>
+              <label>Resting HR (optional) <input id="restHr" type="number" min="30" max="110" inputmode="numeric" placeholder="e.g. 60" /></label>
+              <label>Max HR formula
+                <select id="maxMethod">
+                  <option value="tanaka">Tanaka: 208 − 0.7 × age (recommended)</option>
+                  <option value="fox">Classic: 220 − age</option>
+                  <option value="manual">I know my max HR</option>
+                </select>
+              </label>
+              <label>Max HR <input id="maxHr" type="number" min="100" max="230" inputmode="numeric" /></label>
+              <label>Target zone
+                <select id="target">
+                  <option value="1">Zone 1</option>
+                  <option value="2">Zone 2</option>
+                  <option value="3">Zone 3</option>
+                  <option value="4">Zone 4</option>
+                  <option value="5">Zone 5</option>
+                </select>
+              </label>
+              <label class="check"><input id="beep" type="checkbox" /> Beep when I leave the target zone</label>
+            </div>
+            <p class="muted small">
+              Zones are % of max HR. If you add your resting HR, they switch to the Karvonen method (% of heart rate
+              reserve), which fits your fitness better. Weight is only used for calories. The display refreshes every
+              5 seconds with the average of that window.
+            </p>
+          </details>
+        </div>
       </div>
-
-      <label class="show-all"><input id="showAll" type="checkbox" /> Show all Bluetooth devices, not only heart rate sensors</label>
-
-      <section id="knownWrap" class="known" hidden>
-        <h2>Your devices</h2>
-        <ul id="knownList"></ul>
-      </section>
-
-      <section class="stats">
-        <div><label>Session</label><b id="sessionTime">0:00</b></div>
-        <div><label>Time in zone 2</label><b id="zoneTime">0:00</b></div>
-        <div><label>% in zone</label><b id="zonePct">0%</b></div>
-        <div><label>Average</label><b id="avgBpm">--</b></div>
-        <div><label>Calories (est.)</label><b id="kcal">0</b></div>
-      </section>
-
-      <section class="chart-wrap">
-        <canvas id="chart" height="160"></canvas>
-      </section>
-
-      <details class="settings" open>
-        <summary>Zone settings</summary>
-        <div class="grid">
-          <label>Age <input id="age" type="number" min="10" max="100" inputmode="numeric" /></label>
-          <label>Sex
-            <select id="sex"><option value="male">Male</option><option value="female">Female</option></select>
-          </label>
-          <label>Weight (kg) <input id="weight" type="number" min="30" max="250" step="0.1" inputmode="decimal" /></label>
-          <label>Max HR <input id="maxHr" type="number" min="100" max="230" inputmode="numeric" /></label>
-          <label>Zone 2 low % <input id="lowPct" type="number" min="40" max="90" /></label>
-          <label>Zone 2 high % <input id="highPct" type="number" min="40" max="95" /></label>
-          <label class="check"><input id="beep" type="checkbox" /> Beep when I leave zone 2</label>
-        </div>
-        <p class="hint">
-          Max HR defaults to 220 minus your age. If you know your real max HR, type it in and it wins.
-          Display refreshes every 5 seconds using the average of the readings in that window. Calories are a rough estimate from heart rate, age, sex and weight.
-        </p>
-      </details>
     </main>
     <script type="module" src="/src/main.ts"></script>
   </body>
