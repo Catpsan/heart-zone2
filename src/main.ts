@@ -1,14 +1,16 @@
 // Heart rate zone monitor for indoor/stationary bike training, using the standard Bluetooth Heart Rate service.
 const HR_SERVICE = 0x180d;
 const HR_MEASUREMENT = 0x2a37;
-const TICK_MS = 5000;
-const HISTORY_POINTS = 8640; // whole session, up to 12 hours at 5s per point
+// Readings are recorded once per second; the display refreshes at the rate picked in the dropdown.
+const SAMPLE_SEC = 1;
+const REFRESH_OPTIONS = [1, 2, 3, 5, 10];
+const HISTORY_POINTS = 6 * 3600; // whole session, up to 6 hours at 1 point per second
 const SETTINGS_KEY = "hrZonesSettings.v2";
 const CURRENT_KEY = "hrZonesCurrentRide.v1";
 const HISTORY_KEY = "hrZonesRideHistory.v1";
 const MAX_SAVED_RIDES = 30;
-const WARMUP_TICKS = 120; // first 10 min excluded from drift
-const MIN_DRIFT_TICKS = 240; // need 20 min after warm-up
+const WARMUP_SEC = 600; // first 10 min excluded from drift
+const MIN_DRIFT_SEC = 1200; // need 20 min after warm-up
 // Cycling max HR typically runs ~5 bpm below running max (seated, less muscle mass loaded).
 const BIKE_MAX_OFFSET = 5;
 
@@ -25,6 +27,7 @@ interface Settings {
   maxHr: number | null; // used when maxMethod is "manual"
   target: number; // 1..5
   beep: boolean;
+  refreshSec: number;
 }
 
 interface ZoneDef {
@@ -139,6 +142,7 @@ const els = {
   maxHr: $<HTMLInputElement>("maxHr"),
   target: $<HTMLSelectElement>("target"),
   beep: $<HTMLInputElement>("beep"),
+  refreshSel: $<HTMLSelectElement>("refreshSel"),
   showAll: $<HTMLInputElement>("showAll"),
   knownWrap: $("knownWrap"),
   knownList: $("knownList"),
@@ -156,6 +160,7 @@ function loadSettings(): Settings {
     maxHr: null,
     target: 2,
     beep: false,
+    refreshSec: 5,
   };
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
@@ -294,6 +299,7 @@ interface SavedRide {
   kcalTotal: number;
   target: number;
   hr: number[];
+  step?: number; // seconds per hr point (older rides used 5)
   savedAt: number;
 }
 
@@ -325,6 +331,7 @@ function snapshot(): SavedRide {
     kcalTotal,
     target: settings.target,
     hr: hrHistory,
+    step: SAMPLE_SEC,
     savedAt: Date.now(),
   };
 }
@@ -352,7 +359,9 @@ function restoreCurrent() {
   bpmCount = r.bpmCount;
   peakBpm = r.peakBpm;
   kcalTotal = r.kcalTotal;
-  hrHistory = r.hr;
+  // Older saves stored one point per 5 s; stretch them to the current resolution.
+  const k = Math.max(1, Math.round((r.step ?? 5) / SAMPLE_SEC));
+  hrHistory = k === 1 ? r.hr : r.hr.flatMap((v) => Array(k).fill(v));
   els.restored.hidden = false;
   setTimeout(() => (els.restored.hidden = true), 8000);
 }
@@ -379,7 +388,7 @@ function discardRide() {
 }
 
 function downloadCsv(ride: SavedRide) {
-  const step = TICK_MS / 1000;
+  const step = ride.step ?? 5;
   const lines = ["elapsed_seconds,bpm,zone", ...ride.hr.map((b, i) => `${i * step},${b},${zoneNumber(b)}`)];
   const blob = new Blob([lines.join("\n")], { type: "text/csv" });
   const a = document.createElement("a");
@@ -396,7 +405,7 @@ function renderHistory() {
     ...rides.map((ride, idx) => {
       const li = document.createElement("li");
       const pct = ride.sessionSec ? Math.round(((ride.zoneSecs[ride.target] ?? 0) / ride.sessionSec) * 100) : 0;
-      const d = driftOf(ride.hr);
+      const d = driftOf(ride.hr, ride.step ?? 5);
       const when = new Date(ride.start).toLocaleString(undefined, {
         weekday: "short",
         day: "numeric",
@@ -436,9 +445,9 @@ function renderHistory() {
 
 // HR drift (%): average of the 2nd half vs the 1st half, after a 10 min warm-up.
 // At a steady effort, under 5% suggests a solid aerobic base.
-function driftOf(hr: number[]): number | null {
-  const body = hr.slice(WARMUP_TICKS);
-  if (body.length < MIN_DRIFT_TICKS) return null;
+function driftOf(hr: number[], step = SAMPLE_SEC): number | null {
+  const body = hr.slice(Math.round(WARMUP_SEC / step));
+  if (body.length * step < MIN_DRIFT_SEC) return null;
   const mid = Math.floor(body.length / 2);
   const avg = (a: number[]) => a.reduce((x, y) => x + y, 0) / a.length;
   return (avg(body.slice(mid)) / avg(body.slice(0, mid)) - 1) * 100;
@@ -455,11 +464,12 @@ function driftClass(d: number) {
 
 function renderTrend() {
   const n = hrHistory.length;
-  if (n < 7) {
+  const back = Math.round(30 / SAMPLE_SEC);
+  if (n <= back) {
     els.trend.textContent = "";
     return;
   }
-  const diff = hrHistory[n - 1] - hrHistory[n - 7];
+  const diff = hrHistory[n - 1] - hrHistory[n - 1 - back];
   els.trend.textContent = diff >= 3 ? "↑" : diff <= -3 ? "↓" : "→";
   els.trend.className = `trend ${diff >= 3 ? "up" : diff <= -3 ? "down" : "flat"}`;
 }
@@ -472,12 +482,17 @@ function onReading(bpm: number) {
   if (lastShown === null) renderReading(bpm);
 }
 
-function tick() {
+let sampleCount = 0;
+let displaySamples: number[] = []; // recorded samples since the last display refresh
+let displayTimer: number | undefined;
+
+// Records one sample per second: stats, history and auto-save.
+function sample() {
   let value: number | null = null;
   if (windowReadings.length > 0) {
     value = Math.round(windowReadings.reduce((a, b) => a + b, 0) / windowReadings.length);
-  } else if (lastShown !== null && Date.now() - lastReadingAt < 15000) {
-    value = lastShown; // sensors can skip a beat of notifications; hold briefly
+  } else if (hrHistory.length && Date.now() - lastReadingAt < 15000) {
+    value = hrHistory[hrHistory.length - 1]; // sensors can skip a few notifications; hold briefly
   }
   windowReadings = [];
 
@@ -487,20 +502,34 @@ function tick() {
   }
 
   sessionStart ??= Date.now();
-  sessionSec += TICK_MS / 1000;
-  zoneSecs[zoneNumber(value)] += TICK_MS / 1000;
+  sessionSec += SAMPLE_SEC;
+  zoneSecs[zoneNumber(value)] += SAMPLE_SEC;
   bpmSum += value;
   bpmCount += 1;
   peakBpm = Math.max(peakBpm, value);
-  kcalTotal += kcalPerMinute(value) * (TICK_MS / 60000);
+  kcalTotal += kcalPerMinute(value) * (SAMPLE_SEC / 60);
   hrHistory.push(value);
   if (hrHistory.length > HISTORY_POINTS) hrHistory.shift();
+  displaySamples.push(value);
 
-  renderReading(value);
+  if (++sampleCount % 5 === 0) saveCurrent();
+}
+
+// Refreshes the screen at the chosen rate with the average of the samples in that window.
+function refreshDisplay() {
+  if (displaySamples.length) {
+    renderReading(Math.round(displaySamples.reduce((a, b) => a + b, 0) / displaySamples.length));
+    displaySamples = [];
+  }
   renderTrend();
   renderStats();
   drawChart();
-  saveCurrent();
+}
+
+function startDisplayTimer() {
+  clearInterval(displayTimer);
+  displaySamples = [];
+  displayTimer = window.setInterval(refreshDisplay, settings.refreshSec * 1000);
 }
 
 // Energy estimate from heart rate, weight, age and sex (Keytel et al. 2005).
@@ -709,7 +738,7 @@ function drawChart() {
   const y = (v: number) => 4 + ph - ((v - yMin) / (yMax - yMin)) * ph;
 
   // Show at least 10 minutes so the line doesn't start stretched across the whole width.
-  const stepSec = TICK_MS / 1000;
+  const stepSec = SAMPLE_SEC;
   const totalSec = Math.max(600, (hrHistory.length - 1) * stepSec);
   const x = (i: number) => padL + ((i * stepSec) / totalSec) * pw;
 
@@ -768,11 +797,13 @@ function drawChart() {
   ctx.lineWidth = 2.5;
   ctx.lineJoin = "round";
   ctx.lineCap = "round";
-  for (let i = 1; i < hrHistory.length; i++) {
+  // Long rides have more points than pixels; skip points so we draw about 2 per pixel.
+  const stride = Math.max(1, Math.ceil(hrHistory.length / (pw * 2)));
+  for (let i = stride; i < hrHistory.length; i += stride) {
     const zn = zoneNumber(hrHistory[i]);
     ctx.strokeStyle = zn ? cssVar(ZONES[zn - 1].color) : cssVar("--muted");
     ctx.beginPath();
-    ctx.moveTo(x(i - 1), y(hrHistory[i - 1]));
+    ctx.moveTo(x(i - stride), y(hrHistory[i - stride]));
     ctx.lineTo(x(i), y(hrHistory[i]));
     ctx.stroke();
   }
@@ -1000,6 +1031,16 @@ if (!("bluetooth" in navigator)) {
 els.connectBtn.addEventListener("click", searchDevices);
 els.demoBtn.addEventListener("click", () => (demoTimer ? stopDemo() : startDemo()));
 els.finishBtn.addEventListener("click", finishRide);
+els.refreshSel.replaceChildren(
+  ...REFRESH_OPTIONS.map((sec) => Object.assign(document.createElement("option"), { value: String(sec), textContent: `${sec} s` })),
+);
+if (!REFRESH_OPTIONS.includes(settings.refreshSec)) settings.refreshSec = 5;
+els.refreshSel.value = String(settings.refreshSec);
+els.refreshSel.addEventListener("change", () => {
+  settings.refreshSec = parseInt(els.refreshSel.value, 10) || 5;
+  saveSettings();
+  startDisplayTimer();
+});
 els.discardBtn.addEventListener("click", discardRide);
 
 // Focus mode: just the live card, big, for reading from the bike.
@@ -1032,4 +1073,5 @@ renderKnownDevices();
 renderZones();
 renderStats();
 drawChart();
-setInterval(tick, TICK_MS);
+setInterval(sample, SAMPLE_SEC * 1000);
+startDisplayTimer();

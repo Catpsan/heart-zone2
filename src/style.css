@@ -218,3 +218,6 @@ body.focus .cadence { font-size: 1.1rem; }
 body.focus .focus-info { display: flex; justify-content: center; align-items: center; gap: 28px; flex-wrap: wrap; margin-top: 18px; font-size: 1.1rem; color: var(--muted); }
 body.focus .focus-info b { color: var(--text); font-size: 1.4rem; margin-left: 4px; }
 body.focus .focus-info button { flex: 0 0 auto; padding: 8px 14px; font-size: 0.9rem; }
+
+.refresh { display: flex; align-items: center; gap: 6px; font-size: 0.82rem; color: var(--muted); }
+.refresh select { width: auto; padding: 3px 6px; font-size: 0.82rem; }

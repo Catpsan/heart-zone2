@@ -51,6 +51,9 @@
         </div>
         <div class="subactions">
           <label class="show-all"><input id="showAll" type="checkbox" /> Show all Bluetooth devices</label>
+          <label class="refresh" title="How often the heart rate on screen updates. Readings are still recorded every second.">Refresh
+            <select id="refreshSel"></select>
+          </label>
           <button id="discardBtn" class="link">Discard current ride</button>
         </div>
         <p id="restored" class="restored" hidden>Picked up your unfinished ride where you left off.</p>
@@ -142,8 +145,8 @@
             <p class="muted small">
               Tuned for a stationary bike: estimated max HR is 5 bpm lower than for running. If you've hit a higher max
               on the bike, choose "I know my max HR". Zones are % of max HR. If you add your resting HR, they switch to the Karvonen method (% of heart rate
-              reserve), which fits your fitness better. Weight is only used for calories. The display refreshes every
-              5 seconds with the average of that window.
+              reserve), which fits your fitness better. Weight is only used for calories. The screen refreshes at the rate you pick
+              next to the buttons (default 5 s) with the average of that window; readings are recorded every second.
             </p>
           </details>
         </div>

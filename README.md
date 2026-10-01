@@ -7,7 +7,7 @@ broadcasting HR) and shows, every 5 seconds, which of the 5 heart rate zones you
 
 - Uses the standard Bluetooth Heart Rate service, so any sensor that pairs with Zwift, Strava, etc. works.
 - **Search devices** opens Chrome's Bluetooth scanner listing nearby heart rate sensors (tick "Show all Bluetooth devices" to list everything). Devices you picked before appear under "Your devices" for one-click reconnect.
-- Display refreshes every 5 s with the average of the readings in that window.
+- Display refresh rate is picked from a small dropdown (1, 2, 3, 5 or 10 s, default 5 s) and shows the average of that window. Readings are recorded every second either way.
 - Five zones: Z1 50–60%, Z2 60–70%, Z3 70–80%, Z4 80–90%, Z5 90–100% of max HR. Max HR comes from the Tanaka formula (208 − 0.7 × age) minus 5 bpm for cycling by default, or 220 − age − 5, or your measured max. Add a resting HR to switch to Karvonen (heart rate reserve) zones.
 - "Your zones" panel shows each zone's bpm range for your profile, how it should feel, the target cadence and resistance, and a recommended indoor bike workout, plus a sample training week. Click a zone to make it the target.
 - Profile defaults: age 29, male, 79 kg (editable, saved in the browser).
