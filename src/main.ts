@@ -1,9 +1,11 @@
-// Heart rate zone monitor using the standard Bluetooth Heart Rate service.
+// Heart rate zone monitor for indoor/stationary bike training, using the standard Bluetooth Heart Rate service.
 const HR_SERVICE = 0x180d;
 const HR_MEASUREMENT = 0x2a37;
 const TICK_MS = 5000;
 const HISTORY_POINTS = 360; // 30 minutes at 5s per point
 const SETTINGS_KEY = "hrZonesSettings.v2";
+// Cycling max HR typically runs ~5 bpm below running max (seated, less muscle mass loaded).
+const BIKE_MAX_OFFSET = 5;
 
 // Position relative to the target zone.
 type ZoneState = "below" | "in" | "above";
@@ -27,6 +29,7 @@ interface ZoneDef {
   hi: number;
   color: string;
   feel: string;
+  cadence: string;
   workout: string;
 }
 
@@ -37,8 +40,9 @@ const ZONES: ZoneDef[] = [
     lo: 0.5,
     hi: 0.6,
     color: "--z1",
-    feel: "Very easy, chatting freely",
-    workout: "20–40 min easy, warm-ups, cool-downs and recovery days",
+    feel: "Very easy spin, chatting freely",
+    cadence: "80–90 rpm, very light resistance",
+    workout: "10 min warm-up and 5–10 min cool-down every ride, or 30 min recovery spin",
   },
   {
     n: 2,
@@ -46,8 +50,9 @@ const ZONES: ZoneDef[] = [
     lo: 0.6,
     hi: 0.7,
     color: "--z2",
-    feel: "Easy, can talk in full sentences, nose breathing",
-    workout: "45–90 min steady, 3–4× per week. Most of your training lives here",
+    feel: "Easy, full sentences, nose breathing",
+    cadence: "85–95 rpm, light to moderate resistance",
+    workout: "45–90 min steady, 3–4× per week. Lower the resistance when HR drifts up",
   },
   {
     n: 3,
@@ -56,7 +61,8 @@ const ZONES: ZoneDef[] = [
     hi: 0.8,
     color: "--z3",
     feel: "Moderate, short sentences only",
-    workout: "2 × 15 min with 5 min easy between, at most 1× per week",
+    cadence: "85–95 rpm, moderate resistance",
+    workout: "2 × 15 min with 5 min easy spin between, at most 1× per week",
   },
   {
     n: 4,
@@ -65,7 +71,8 @@ const ZONES: ZoneDef[] = [
     hi: 0.9,
     color: "--z4",
     feel: "Hard, a few words at a time",
-    workout: "4 × 6 min with 3 min easy between, 1× per week",
+    cadence: "85–100 rpm, hard resistance",
+    workout: "4 × 8 min with 4 min easy spin between, 1× per week",
   },
   {
     n: 5,
@@ -74,7 +81,8 @@ const ZONES: ZoneDef[] = [
     hi: 1.0,
     color: "--z5",
     feel: "All-out, can't talk",
-    workout: "5 × 3 min with 3 min easy between, 1× per week after 4–6 weeks of base",
+    cadence: "95–110 rpm, high resistance",
+    workout: "5 × 3 min with 3 min easy spin between, 1× per week after 4–6 weeks of base",
   },
 ];
 
@@ -89,6 +97,7 @@ const els = {
   zoneLabel: $("zoneLabel"),
   targetName: $("targetName"),
   targetRange: $("targetRange"),
+  targetCadence: $("targetCadence"),
   zbar: $("zbar"),
   zbarLegend: $("zbarLegend"),
   connectBtn: $<HTMLButtonElement>("connectBtn"),
@@ -149,7 +158,8 @@ function saveSettings() {
 let settings = loadSettings();
 
 function estimatedMaxHr(method: MaxMethod) {
-  return Math.round(method === "fox" ? 220 - settings.age : 208 - 0.7 * settings.age);
+  const base = method === "fox" ? 220 - settings.age : 208 - 0.7 * settings.age;
+  return Math.round(base - BIKE_MAX_OFFSET);
 }
 
 function effectiveMaxHr() {
@@ -322,6 +332,7 @@ function renderZones() {
   const t = targetRange();
   els.targetName.textContent = `Zone ${t.n}`;
   els.targetRange.textContent = `${t.low}–${t.high} bpm`;
+  els.targetCadence.textContent = `Aim for ${t.cadence}`;
 
   els.zbar.replaceChildren(
     ...ranges.map((z) => {
@@ -345,7 +356,9 @@ function renderZones() {
 
   const max = effectiveMaxHr();
   const maxSource =
-    settings.maxMethod === "manual" ? "your measured max" : settings.maxMethod === "fox" ? "220 − age" : "Tanaka formula";
+    settings.maxMethod === "manual"
+      ? "your measured max"
+      : `${settings.maxMethod === "fox" ? "220 − age" : "Tanaka"} − ${BIKE_MAX_OFFSET} for cycling`;
   const method = settings.restHr ? `${maxSource}, Karvonen with resting HR ${settings.restHr}` : maxSource;
   els.profileLine.textContent = `Age ${settings.age}, ${settings.sex}, ${settings.weightKg} kg · Max HR ${max} bpm (${method})`;
 
@@ -360,7 +373,7 @@ function renderZones() {
           <b>Zone ${z.n}</b><span class="zname">${z.name}</span>
           <span class="zbpm">${z.low}–${z.high} <small>bpm</small></span>
         </div>
-        <div class="zfeel">${z.feel}</div>
+        <div class="zfeel">${z.feel} · ${z.cadence}</div>
         <div class="zwork">${z.workout}</div>`;
       row.addEventListener("click", () => {
         els.target.value = String(z.n);
@@ -373,12 +386,12 @@ function renderZones() {
 
   const r = ranges;
   const plan = [
-    ["Mon", `Zone 2 · 60 min at ${r[1].low}–${r[1].high} bpm`],
-    ["Tue", `Zone 4 intervals · 4 × 6 min at ${r[3].low}–${r[3].high}, 3 min easy between`],
-    ["Wed", `Zone 2 · 45–60 min`],
-    ["Thu", `Zone 1 recovery · 30 min under ${r[0].high} bpm, or rest`],
-    ["Fri", `Zone 2 · 60 min`],
-    ["Sat", `Long Zone 2 · 90 min, optional 5 × 3 min Zone 5 (${r[4].low}+ bpm) once a week`],
+    ["Mon", `Zone 2 · 60 min at ${r[1].low}–${r[1].high} bpm, 85–95 rpm`],
+    ["Tue", `Zone 4 intervals · 10 min warm-up, 4 × 8 min at ${r[3].low}–${r[3].high}, 4 min easy spin between`],
+    ["Wed", "Zone 2 · 45–60 min"],
+    ["Thu", `Zone 1 recovery spin · 30 min under ${r[0].high} bpm, or rest`],
+    ["Fri", "Zone 2 · 60 min"],
+    ["Sat", `Long Zone 2 · 90 min. Optional once a week: 5 × 3 min Zone 5 (${r[4].low}+ bpm)`],
     ["Sun", "Rest"],
   ];
   els.weekPlan.replaceChildren(
@@ -410,8 +423,8 @@ function renderReading(bpm: number) {
     rel === "in"
       ? `In your target zone ${t.n}`
       : rel === "below"
-        ? `Below target, pick it up (+${t.low - bpm} bpm)`
-        : `Above target, ease off (−${bpm - t.high} bpm)`;
+        ? `Below target, add resistance (+${t.low - bpm} bpm)`
+        : `Above target, lower resistance (−${bpm - t.high} bpm)`;
 
   if (settings.beep && lastRelation === "in" && rel !== "in") beep(rel);
   lastRelation = rel;

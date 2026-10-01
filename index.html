@@ -12,7 +12,7 @@
     <header class="topbar">
       <div class="brand">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-7.5-4.6-9.6-9.3C.9 8.4 3 4.5 6.7 4.5c2.1 0 3.6 1.1 4.3 2.6h2c.7-1.5 2.2-2.6 4.3-2.6 3.7 0 5.8 3.9 4.3 7.2C19.5 16.4 12 21 12 21z" /></svg>
-        <span>Heart Zones</span>
+        <span>Heart Zones</span><span class="mode">Stationary bike</span>
       </div>
       <span id="conn" class="conn off">Disconnected</span>
     </header>
@@ -32,6 +32,7 @@
             </div>
             <div class="bpm"><span id="bpm">--</span><small>bpm</small></div>
             <div id="zoneLabel" class="zone-label">Connect your heart rate strap to start</div>
+            <div id="targetCadence" class="cadence"></div>
 
             <div class="zbar" id="zbar"></div>
             <div class="zbar-legend" id="zbarLegend"></div>
@@ -79,8 +80,9 @@
             <h2>Recommended week</h2>
             <ul id="weekPlan" class="week"></ul>
             <p class="muted small">
-              General guidance for a healthy adult building aerobic base. If you're new to exercise or have a heart
-              condition, check with a doctor first.
+              Indoor tips: use a fan, drink every 15 min, and when your heart rate drifts up late in a ride, lower the
+              resistance rather than leave the zone. General guidance for a healthy adult building aerobic base. If
+              you're new to exercise or have a heart condition, check with a doctor first.
             </p>
           </section>
 
@@ -95,8 +97,8 @@
               <label>Resting HR (optional) <input id="restHr" type="number" min="30" max="110" inputmode="numeric" placeholder="e.g. 60" /></label>
               <label>Max HR formula
                 <select id="maxMethod">
-                  <option value="tanaka">Tanaka: 208 − 0.7 × age (recommended)</option>
-                  <option value="fox">Classic: 220 − age</option>
+                  <option value="tanaka">Tanaka − 5 for cycling (recommended)</option>
+                  <option value="fox">220 − age − 5 for cycling</option>
                   <option value="manual">I know my max HR</option>
                 </select>
               </label>
@@ -113,7 +115,8 @@
               <label class="check"><input id="beep" type="checkbox" /> Beep when I leave the target zone</label>
             </div>
             <p class="muted small">
-              Zones are % of max HR. If you add your resting HR, they switch to the Karvonen method (% of heart rate
+              Tuned for a stationary bike: estimated max HR is 5 bpm lower than for running. If you've hit a higher max
+              on the bike, choose "I know my max HR". Zones are % of max HR. If you add your resting HR, they switch to the Karvonen method (% of heart rate
               reserve), which fits your fitness better. Weight is only used for calories. The display refreshes every
               5 seconds with the average of that window.
             </p>
